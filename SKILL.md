@@ -7,7 +7,7 @@ description: >-
 user-invocable: true
 metadata:
   title: 讲义生成器
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # 讲义生成器（PDF 选题 → 模板格式 docx）
@@ -21,7 +21,7 @@ metadata:
 |---|---|
 | `scripts/analyze_template.py` | 逆向模板 docx → 格式报告（字体/字号/颜色/行距/页面） |
 | `scripts/docgen.py` | docx 生成器，以模板为基底保留样式表和页脚；默认=学而思培优格式，可加载 profile 定制 |
-| `scripts/pdf_extract.py` | 素材 PDF 提取：题目标记索引、图块检测、区域/条带裁剪 |
+| `scripts/pdf_extract.py` | 素材 PDF 提取：题目标记索引、左文右图归属、300dpi 白边裁图、缺甲乙丙则视觉补裁 |
 
 依赖：`python-docx`、`PyMuPDF(fitz)`、`Pillow`、`LibreOffice(soffice, 验证用)`。
 
@@ -55,8 +55,9 @@ ex.print_index()   # 每文件: 题目标记@y位置 | 图块bbox列表
    缺字符处显示为文本断裂（如"量程为 | ，"）。
 2. **行条带视觉填空**：对含缺失字形的行渲染 300dpi 窄条，只读这一行：
    ```python
-   bands = ex.glyph_bands(fid, pg, y0, y1)      # 定位矢量字形行带
-   ex.crop_band(fid, pg, band, 'strip.png')     # → 视觉工具逐字转录该行
+   span = ex.problem_span(fid, pg, '例题4')     # 取本栏 x，双栏不要用整页宽
+   bands = ex.glyph_bands(fid, pg, span['y0'], span['y1'])
+   ex.crop_band(fid, pg, band, 'strip.png', x=span['col'])
    ```
    视觉提示词必须中性——**不得**把推测的数据写进 prompt（会污染读图结果）。
    视觉服务并发 ≤3，串行 + 8s 间隔防限流。
@@ -66,15 +67,33 @@ ex.print_index()   # 每文件: 题目标记@y位置 | 图块bbox列表
 
 转录结果统一存 `transcripts.py`（dict：题干多行文本 + 图文件名 + 图宽 cm）。
 
-### Phase 5 — 图块裁剪
+### Phase 5 — 图块裁剪（防多裁、留图注）
+默认 **PDF 300dpi clip + 只收白边**。不要用 `fig_only` 当默认——它会把底部分离的「甲乙丙」当残行删掉。
+
+- **只要图**（默认）：`crop_problem_figs` / `crop_fig`，`trim='whitespace'`
+  — 垂直重叠 ≥50%、中心落在本题；底边 pad 加大以纳入图注。文本层有甲乙丙则并进裁切框。
+- **原题整块**：`crop_question_card`，只收白边，保留题干。
+- **选项电路整块**（含 A–D 标签）：`crop_rect(..., pad=0, trim='whitespace')`。
+- **`fig_only`**：仅当确认没有甲乙丙/图注、只要电路线框时才显式传入。
+
 ```python
-ex.crop_problem_figs(fid, pg, '例题4', 'figs/M2E1')   # 自动关联题目区域内的图
-ex.crop_rect(fid, pg, (60,55,480,258), 'figs/OPT.png', pad=0)  # 选项块/特殊区域（含A-D标签）
-hstack(['图甲.png','图乙.png'], 'figs/combo.png')     # 多图横排
+ex.crop_problem_figs(fid, pg, '例题4', 'figs/M2E1')          # 只要图（白边）
+ex.crop_question_card(fid, pg, '例题4', 'figs/M2E1_card.png')  # 原题整块
+ex.crop_rect(fid, pg, (60,55,480,258), 'figs/OPT.png', pad=0)  # 选项块
+hstack(['图甲.png','图乙.png'], 'figs/combo.png')              # 多图横排
 ```
+
+出现 `WARN ... 甲乙丙图注在框外` / `need vision refine` / `end uncertain` 时：
+
+1. `ex.page_png(fid, pg, 'work/page.png')` 渲染整页（216dpi）
+2. 视觉模型给出**含甲乙丙、不含题干/邻题**的千分比框 `(x1,y1,x2,y2)`（0–1000）
+3. `ex.crop_permille(fid, pg, (x1,y1,x2,y2), 'figs/xx.png')` 重裁（默认也只收白边）
+4. 嵌入前再看一眼：图注齐全、无下一题、无页眉页脚、无答案。细长比 >1:4 或面积 >30% 页的框，重给。
+
 图块判定：内嵌位图 bbox 45~500pt = 电路图；<30pt 小矢量 = 缺失字形。
 设计类题的 4 个选项电路 → 裁含标签的整块区域，一张图嵌入。
 表盘读数题（电流表/电压表指针）→ 嵌原图让学生自己读，不要转录指针读数。
+学而思「左文右图」不是报纸双栏：只有左右两侧都有例题/练习标记才当双栏。通栏大图（宽 ≥ 页宽 60%）允许跨栏。
 
 ### Phase 6 — 组装与验证
 ```python
@@ -100,3 +119,7 @@ soffice --headless --convert-to pdf --outdir 验证目录 输出.docx
 - 同一标记在不同页可能重名（如两份"练习3"），关联图块时先 `marker_y` 确认位置
 - 旧版学而思学生版无答案，讲义默认学生版（无答案页）；需要答案版时另行生成
 - 生成后保留工作区（脚本+素材+transcripts），改题/换题/出答案版只需改数据重跑
+- 多裁不要靠「整页渲染当默认裁刀」（那是碎图教材的路）。学而思默认 300dpi 白边裁切；缺甲乙丙再渲染+视觉框
+- 左文右图：例题标记都在左侧时不要当双栏，否则右边电路会被 other_column 丢掉
+- 找不到下一题标记时禁止默默裁到页脚；脚本会 WARN，应视觉复核或换题
+- 改了 `pdf_extract.py` 后跑：`python3 ~/.claude/skills/handout-builder/scripts/test_pdf_extract_crop.py`
