@@ -7,7 +7,7 @@ description: >-
 user-invocable: true
 metadata:
   title: 讲义生成器
-  version: 1.3.0
+  version: 1.4.0
 ---
 
 # 讲义生成器（PDF 选题 → 模板格式 docx）
@@ -27,6 +27,16 @@ metadata:
 依赖：`python-docx`、`PyMuPDF(fitz)`、`Pillow`、`LibreOffice(soffice, 验证用)`。
 
 ## 工作流
+
+### Phase 0 — 默认模板（讲义版）
+用户未明确指定模板时，**默认输出"讲义版"**（用户长期偏好，2026-10 确认）：
+
+- TPL = `/Users/by/Library/Mobile Documents/com~apple~CloudDocs/100-工作/2627 Physics/初中物理/1 九上讲义/0926 第3讲 电学复习专题3-欧姆定律电功率.docx`
+- 版式特征：宋体正文、【例N】内联标签、"知识要点"小标题、四边 ≈2.2cm 页边距
+- `b = DocBuilder(TPL)` 直接用默认 profile，不需要 format_profile.json
+- 输出命名：原文件名 + `（讲义版）` 后缀；参考实现 `~/hw_dg4/build.py`（可改着复用）
+- 学而思原版式复刻（微软雅黑、例题/练习独立标签段）仅在用户明确要求时使用
+- TPL 若被移动/找不到：`mdfind -name "0926 第3讲"` 或在 九上讲义/ 目录下 ls 定位
 
 ### Phase 1 — 解析模板格式
 ```bash
@@ -129,6 +139,7 @@ soffice --headless --convert-to pdf --outdir 验证目录 输出.docx
 - 例题区加粗、练习区常规是模板惯例，docgen 已内置
 
 ## 关键规则（踩坑沉淀）
+- **默认输出"讲义版"模板（Phase 0）**：未指定模板 → 0926 第3讲 TPL + 输出名加 `（讲义版）` 后缀，不要退回学而思版式
 - **数字仲裁协议见 Phase 4 第 4 步——跳过它直接定稿 = 必返工**（2026-10 实测首轮 20+ 处数字错误）
 - 肉眼读 300dpi 条带会"脑补"：读到"标有"就预期 6V 3W 之类常见规格，字形模糊时眼睛迁就预期。条带读数只能当假设
 - WPS 转换版是最强免费 OCR 参照物，交付前主动 `ls` 素材目录找它；用户手里往往已经转过一轮
