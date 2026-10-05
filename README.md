@@ -1,101 +1,71 @@
-# Handout Builder — 讲义生成器（Claude Code Skill）
+# Handout Compose — 讲义组编
 
-**English TL;DR:** A Claude Code skill that builds review/exercise handouts (Word .docx) by selecting problems from your existing textbook/worksheet PDFs and replicating the exact formatting of any Word template — fonts, colors, heading hierarchy, layout. Circuit diagrams and experiment figures are auto-cropped from the source PDFs at 300 dpi and embedded. Ships with a "three-fold verification protocol" that catches vision-model transcription hallucinations on PDFs whose numbers are vector outlines.
+从多份 PDF 教材、讲义或题库中选材，按教学目标组织知识、例题与练习，生成可编辑 Word 讲义，并保留来源记录。
 
----
+本仓库由原 **handout-builder** 整合升级。仓库地址保留以延续历史，技能名称和统一入口改为 **handout-compose**。旧版工具已包含在本技能内，无须同时安装两个组编技能。
 
-## 它解决什么问题
+## 工作方式
 
-老师手里往往有几十份现成的专题讲义 PDF，想组一份复习卷时面临两难：
+学习目标 → 素材盘点 → 选材去重 → 教学编排与课时预算 → 精细转录与裁图 → Word 生成 → 教学及内容验收。
 
-- **直接截图拼文档** → 格式混乱，无法编辑，篇幅失控
-- **手动重新录入** → 工作量巨大，电路图没法画
-
-这个 skill 让 Claude Code 完成整个流程：
-
-```
-素材 PDF 们 + 一份 Word 模板
-        │
-        ├─ ① 模板格式逆向（字体/字号/颜色/行距/层级 → 格式档案）
-        ├─ ② 素材盘点（题目标记索引 + 电路图自动检测）
-        ├─ ③ 按课堂时长选题（如 2 小时 ≈ 4 模块 32 题）
-        ├─ ④ 题目转录 ⚠️ 三重验证（防视觉幻觉）
-        ├─ ⑤ 电路图 300dpi 裁剪（默认只收白边、留甲乙丙图注）
-        └─ ⑥ 组装 docx → 转 PDF 双重校验 → 交付
-        │
-生成：格式与模板完全一致、文字可编辑、原版电路图嵌入的讲义
-```
+- 按学生水平和先修关系组织内容，分别安排示范与独立练习。
+- 保留跨页题、共用材料、公式、图注和选项；数字以原 PDF 页面为依据。
+- 记录每个输出单元的来源，并区分摘录、重述、改编和新编。
+- 支持指定 Word 模板；没有模板时使用朴素讲义版。
+- 将来源台账和技术记录与学生正文分开，换题时同步检查目标、编号及答案。
 
 ## 安装
 
 ```bash
-git clone https://github.com/kulakeepor/claude-skill-handout-builder.git
-cp -r claude-skill-handout-builder ~/.claude/skills/handout-builder
+git clone https://github.com/kulakeepor/claude-skill-handout-builder.git handout-compose
 ```
 
-依赖（Python 3.8+）：
+把仓库中的 `SKILL.md`、`agents/`、`references/`、`scripts/` 复制到使用工具的技能目录：
 
-```bash
-pip install python-docx PyMuPDF Pillow
-brew install --cask libreoffice   # 验证排版用，也可不装跳过视觉校验
-```
+- Codex：`~/.codex/skills/handout-compose/`
+- Claude Code：`~/.claude/skills/handout-compose/`
+
+若已经安装旧版 handout-builder，先备份旧版，再将旧入口移出技能发现目录；保留一个组编入口即可。如果已有自动化脚本引用旧目录，先更新引用或保留兼容脚本路径。
+
+辅助脚本依赖 `python-docx`、`PyMuPDF` 和 `Pillow`，建议安装到独立 Python 环境。版式检查需要可用的文档渲染工具，例如 LibreOffice；优先复用已有环境。扫描页另需实际可用的 OCR 工具，仓库不自带 OCR 引擎。
 
 ## 使用
 
-对 Claude Code 说（自动触发 skill）：
+直接说：
 
-- “从这些 PDF 挑题，按 XX 模板格式生成一份 2 小时复习讲义”
-- “做一份期中复习专题 / 组卷”
+> 用讲义组编技能，从这些 PDF 中制作一份九年级、90 分钟的电功率复习讲义，按这个 Word 模板排版。
 
-或显式调用：`/handout-builder`
+Codex 也可显式使用 `$handout-compose`，Claude Code 可使用 `/handout-compose`。可指定教学目标、必用内容、排除范围、课时、模板及答案版需求。
 
-首次效果实测：21 份专题 PDF（161 页）→ 11 页复习讲义，31 张电路图，格式与模板逐项一致（标题深蓝 14pt、知识要点绿色、大栏目空心字体、例题区加粗练习区常规、页脚页码）。
+跨文档选材和重新编排使用本技能；单纯保留整份 PDF 原内容的格式转换，可使用独立的 pdf-handout-copy 技能。
 
-## 核心机制：三重验证协议（这个 skill 最重要的部分）
+## 工具与协议
 
-许多教辅 PDF 的**数字和物理符号是矢量路径**，不在文本层里。视觉模型整题转录的幻觉率实测约 30%——它会把题"读成"一道相似的标准题，数据全错但看起来很合理。协议：
-
-1. **文本层锚定** — 题目结构、非数字文字以 `get_text()` 为准；缺字符处表现为文本断裂（如"量程为 | ，"）
-2. **行条带视觉填空** — 只对含矢量字形的行渲染 300 dpi 窄条逐行精读（`glyph_bands()` + `crop_band()`）；视觉提示词必须中性，写入推测数据会污染读图
-3. **自洽校验** — 数据要能通过学科推导互证。例：电动机题"36V 18W"、线圈 2Ω、10min，四个选项 10800J(=W总)、300J(=I²Rt)、10500J(=W−Q) 全部精确可导出 → 数据组锁定
-
-校验不过 → 重裁更窄条带重读 → 仍不过则弃题换题。
-
-## 脚本
-
-| 脚本 | 用途 |
+| 文件 | 用途 |
 |---|---|
-| `scripts/analyze_template.py` | 逆向任意 Word 模板 → 样式报告（各层级字体/字号/颜色/对齐/行距） |
-| `scripts/docgen.py` | docx 生成器：以模板为基底保留样式表/页脚，清空正文注入新内容；默认格式档案=学而思培优讲义，可用 `format_profile.json` 定制任意模板 |
-| `scripts/pdf_extract.py` | 素材提取：题目标记索引、左文右图归属、300dpi 白边裁图、缺甲乙丙则视觉补裁 |
-| `scripts/test_pdf_extract_crop.py` | 裁图几何回归：白边/fig_only、图注并框、左文右图不误判双栏 |
+| `scripts/pdf_extract.py` | 题目标记索引、页面和区域裁剪、图注与栏位辅助判断 |
+| `scripts/glyph_ascii.py` | 疑难字形高清点阵 |
+| `scripts/analyze_template.py` | Word 模板格式分析 |
+| `scripts/docgen.py` | 以模板为基底生成正文和内联图片 |
+| `scripts/test_pdf_extract_crop.py` | 裁剪算法回归测试 |
+| `references/selection.md` | 教学设计、去重、课时取舍 |
+| `references/production.md` | 制作步骤、工具接口与真实限制 |
+| `references/provenance.md` | 来源、改编记录与版本对应 |
+| `references/content-contract.md` | 文字、公式与图片核对 |
+| `references/copy-contract.md` | 可编辑结构与复制排版 |
+| `references/acceptance.md` | 内容、输出、版式及实际粘贴验收 |
+| `references/workspace-template.md` | 工作记录模板 |
 
-## 裁图（v1.2.0）
+## 限制与验证
 
-学而思讲义的电路图是完整位图，不要用「整页渲染当默认裁刀」（那是碎图教材的路）。
+本技能是工作流和辅助工具，不是全自动的教学质量或 OCR 准确性保证。题目标记索引不能覆盖所有正文，裁图几何规则不能代替原页核对。`docgen.py` 的内置样式是旧学而思配置，加载模板不会自动复刻直接格式；须显式配置并检查页面设置。复杂公式和表格需要原生结构补充。
 
-- **默认**：PDF clip 300dpi + 只收白边（`trim='whitespace'`）。底边 pad 加大，文本层有「甲乙丙」会并进裁切框。
-- **不要默认 `fig_only`**：它会把底部分离的图注当残行删掉。
-- **左文右图不是报纸双栏**：只有左右两侧都有例题/练习标记才当双栏，否则右边电路会被丢掉。
-- **图注仍在框外**：脚本会 WARN → 整页渲染 + 视觉千分比框 → `crop_permille` 再裁一刀。
+已执行：技能结构校验、22 项裁图算法回归、Word 生成与回读检查。整合后的真实多 PDF 端到端试编、全页渲染与剪贴板验证尚未完成。某次讲义的质量必须以该次任务的实际证据和验收记录为准。
 
-改了 `pdf_extract.py` 后请跑：
+运行现有裁图回归：
 
 ```bash
 python3 scripts/test_pdf_extract_crop.py
 ```
 
-## 定制其他模板
-
-`analyze_template.py` 产出样式报告后，把各层级角色映射成 `format_profile.json`（键见 `docgen.py` 的 `DEFAULT_PROFILE`），传给 `DocBuilder(template, 'format_profile.json')` 即可。默认档案已内置常见培优讲义样式，同款模板可直接用。
-
-## 限制
-
-- 素材需有文本层（纯扫描件需先 OCR）
-- 题目标记需为"例题N/练习N/作业N/编号."风格（其他风格改 `pdf_extract.py` 的正则即可）
-- 生成的讲义为学生版（无答案）；答案版需另行生成
-- ⚠️ 请仅用于自己有权的素材：skill 不上传、不包含任何教材内容，仓库中只有代码
-
-## License
-
-MIT
+仓库不包含教材 PDF、私人 Word 模板或生成的学生讲义。许可证沿用 MIT。

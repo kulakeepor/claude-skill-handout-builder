@@ -1,0 +1,4 @@
+interface:
+  display_name: "讲义组编"
+  short_description: "从多份 PDF 按教学目标选材、组织知识与练习，生成可追溯的讲义"
+  default_prompt: "使用 $handout-compose，从这些 PDF 中选材并按教学目标组编一份讲义。"
